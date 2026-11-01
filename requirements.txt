@@ -1,0 +1,11 @@
+# Dependencias del notebook DATALAB_CHALLENGE.ipynb
+numpy
+scipy
+matplotlib
+seaborn
+statsmodels
+prophet
+scikit-learn
+xgboost
+tensorflow
+jupyterlab
