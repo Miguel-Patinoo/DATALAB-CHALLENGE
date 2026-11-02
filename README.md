@@ -18,7 +18,7 @@
 - [Reproducibilidad](#reproducibilidad)
 - [Limitaciones y trabajo futuro](#limitaciones-y-trabajo-futuro)
 - [Referencias](#referencias)
-- [Equipo, licencia y contacto](#equipo-licencia-y-contacto)
+- [Equipo, licencia y contacto](#equipo-udea)
 
 ---
 
@@ -34,7 +34,7 @@ Todo el trabajo (análisis, modelos, comparación y generación del tablero) viv
 
 - Estadística descriptiva y diagnóstico de la serie (estacionariedad, ACF/PACF, estacionalidad).
 - Exploración de variables exógenas con correlación cruzada y causalidad de Granger.
-- Ocho enfoques comparados: Naïve, ARIMAX, ETS, Prophet, Elastic Net, XGBoost, LSTM y GRU.
+- Ocho enfoques comparados: Naïve, ARIMA/ARIMAX, ETS, Prophet, Elastic Net, XGBoost, LSTM y GRU.
 - Pronóstico de jul-2026 a jun-2027 con bandas de incertidumbre.
 - Un tablero interactivo complementario (`tablero_ipap.html`) que se regenera con cada ejecución.
 
@@ -87,22 +87,29 @@ Formato de los CSV: separador `;`, decimal `,` y fecha con el patrón `AAAAMmm` 
 
 **Validación hold-out en tres etapas** (común a todos los modelos):
 
-1. **Entrenamiento** con la historia hasta jun-2025 (174 observaciones).
+1. **Entrenamiento** con la historia hasta jun-2025 (174 observaciones, por encima del mínimo sugerido de 48).
 2. **Prueba** sobre los 12 meses siguientes (jul-2025 a jun-2026), sin incorporar sus valores reales; se calculan RMSE y MAPE.
 3. **Reentrenamiento** con toda la serie y pronóstico final de jul-2026 a jun-2027.
 
-ETS, Elastic Net y XGBoost eligen su especificación con una validación *walk-forward* de 13 orígenes semestrales dentro del entrenamiento, de modo que la prueba nunca interviene en esa elección. Se comparan siempre contra un **baseline Naïve** (repetir el último valor observado): un modelo solo aporta valor si lo supera.
+**Cómo se elige la especificación de cada modelo** (sin usar la prueba, salvo donde se indica):
+
+- **ETS, Elastic Net y XGBoost:** validación *hold-out* de 12 meses dentro del entrenamiento (ajuste hasta jun-2024 y validación jul-2024 a jun-2025). Se escoge la especificación de menor MAPE en esa ventana.
+- **ARIMA/ARIMAX:** el orden (*p*, *q*) se elige por AIC sobre el entrenamiento. La decisión de incluir o no el IMP rezagado entre las dos finalistas se tomó con el MAPE de la prueba.
+- **LSTM y GRU:** validación cruzada temporal (`TimeSeriesSplit`, 5 folds y hueco de 12 ventanas) con grilla gruesa y grilla fina, minimizando el RMSE.
+- **Prophet:** los parámetros se afinaron por tanteo con el MAPE de la prueba, y además se reporta el *backtest* nativo del paquete.
+
+Se comparan siempre contra un **baseline Naïve** (repetir el último valor observado): un modelo solo aporta valor si lo supera.
 
 **Modelos**
 
 | Familia | Modelo | Idea central |
 |---|---|---|
 | Baseline | Naïve | Repite el último valor observado |
-| Clásico | ARIMAX | ARIMA(p,1,q) sobre log(IPAP) con deriva y exógena opcional (IMP rezagado 12 meses) |
-| Clásico | ETS | Suavizamiento exponencial; 36 especificaciones evaluadas por *walk-forward* |
-| Aditivo | Prophet | Tendencia lineal por tramos con puntos de cambio; sin estacionalidad anual |
-| ML | Elastic Net | Regresión penalizada, estrategia directa multi-horizonte (un modelo por mes pronosticado) |
-| ML | XGBoost | *Boosting* de árboles con la misma estrategia directa y pérdida de error absoluto |
+| Clásico | ARIMA/ARIMAX | ARIMA(p,1,q) sobre log(IPAP) con deriva y exógena opcional (IMP rezagado 12 meses). Se evalúan las versiones con y sin IMP |
+| Clásico | ETS | Suavizamiento exponencial; 36 especificaciones evaluadas por hold-out de 12 meses, también el promedio de las dos mejores |
+| Aditivo | Prophet | Tendencia lineal por tramos (25 puntos de cambio candidatos, rango 0,8, flexibilidad 0,05); sin estacionalidad anual |
+| ML | Elastic Net | Regresión penalizada, estrategia directa multi-horizonte (un modelo por mes pronosticado); 4 especificaciones de variables |
+| ML | XGBoost | *Boosting* de árboles con la misma estrategia directa, pérdida de error absoluto y grilla conservadora; 4 especificaciones de variables |
 | Deep learning | LSTM, GRU | Redes recurrentes con salida directa de 12 pasos y ensamble de 10 semillas |
 
 **Pruebas estadísticas aplicadas**
@@ -111,11 +118,13 @@ ETS, Elastic Net y XGBoost eligen su especificación con una validación *walk-f
 |---|---|---|
 | ADF y KPSS | Estacionariedad y orden de diferenciación | Serie no estacionaria en nivel; estacionaria con una diferencia (*d* = 1) |
 | ACF / PACF y STL | Autocorrelación y estacionalidad | Órdenes bajos; sin patrón estacional anual claro, por lo que se descartan modelos estacionales |
-| CCF con *prewhitening* | Rezagos en que una exógena antecede al IPAP | Solo IMP es significativa (rezagos 0, 6, 12 y 24; máximo 0,31 en el rezago 12) |
+| CCF con *prewhitening* | Rezagos en que una exógena antecede al IPAP | Solo IMP se considera relevante (rezagos 0, 6, 12 y 24; máximo 0,31 en el rezago 12) |
 | Granger (rezagos 1-12) | ¿La exógena ayuda a predecir el IPAP? | IMP p = 0,011 (rezago 12) · TRM p = 0,041 (rezago 1) · TEMP p = 0,424 · VOL p = 0,191 |
-| AIC / BIC | Orden (*p*, *q*) del ARIMAX | Se selecciona (0,1,2) |
-| Ljung-Box | Residuos como ruido blanco | No se rechaza ausencia de autocorrelación (p = 0,82; 0,20; 0,34) |
+| AIC / BIC | Orden (*p*, *q*) del ARIMA | AIC selecciona (0,1,2); BIC prefiere un modelo más simple, (0,1,0) |
+| Ljung-Box | Residuos como ruido blanco | No se rechaza ausencia de autocorrelación (p = 0,82; 0,20; 0,34 en los rezagos 6, 12 y 24)¹ |
 | Jarque-Bera | Normalidad de residuos | Se rechaza (colas pesadas); los intervalos son aproximados |
+
+¹ Diagnóstico del ARIMAX con IMP estimado con el entrenamiento.
 
 Los detalles de cada modelo (hiperparámetros, grillas, diagnósticos y gráficas) están documentados paso a paso en el notebook.
 
@@ -123,32 +132,35 @@ Los detalles de cada modelo (hiperparámetros, grillas, diagnósticos y gráfica
 
 ## Resultados
 
-> **Resultados con datos hasta jun-2026.** Al agregar nuevos meses y reejecutar el notebook, las métricas y el pronóstico cambian; la versión vigente está en la sección 5 del notebook y en `tablero_ipap.html`.
+> **Resultados con datos hasta jun-2026.** Al agregar nuevos meses y reejecutar el notebook, las métricas y el pronóstico cambian; la versión vigente está en el notebook (secciones 3, 4 y 5) y en `tablero_ipap.html`.
 
-Desempeño en la prueba hold-out (jul-2025 a jun-2026). Menor es mejor.
+Desempeño en la prueba hold-out (jul-2025 a jun-2026), ordenado por MAPE. Menor es mejor.
 
-| Modelo | RMSE | MAPE |
-|---|---:|---:|
-| **ARIMAX** (ARIMA(0,1,2) + deriva)¹ | **5,25** | **1,7 %** |
-| Prophet | 6,64 | 2,36 % |
-| XGBoost | 9,30 | 3,41 % |
-| Elastic Net (GLMnet) | 10,68 | 3,81 % |
-| LSTM² | 12,32 | 4,4 % |
-| Naïve (baseline) | 14,10 | 4,9 % |
-| ETS | 18,78 | 7,28 % |
-| GRU² | 35,71 | 13,52 % |
+| Modelo | RMSE | MAPE | MAPE validación² |
+|---|---:|---:|---:|
+| **ARIMA(0,1,2) + deriva**³ | **5,25** | **1,74 %** | n. a. |
+| Prophet | 6,64 | 2,36 % | n. a. |
+| Elastic Net (compacto, sin IMP) | 10,68 | 3,81 % | 4,94 % |
+| XGBoost (compacto, con IMP) | 11,78 | 4,32 % | 4,15 % |
+| Naïve (baseline) | 14,10 | 4,90 % | n. a. |
+| GRU⁴ | 18,79 | 6,17 % | n. a. |
+| ETS(A,N,M) | 18,03 | 7,01 % | 1,23 % |
+| LSTM⁴ | 23,88 | 7,56 % | n. a. |
 
-¹ El modelo seleccionado es la versión **sin** el regresor IMP; la versión con IMP rezagado obtuvo RMSE 7,83 y MAPE 2,84 % en la misma prueba.
-² Alta variabilidad entre ejecuciones: resultados no significativos.
+² MAPE en la ventana de validación hold-out (jul-2024 a jun-2025), solo para los modelos elegidos con ese procedimiento.
+³ El modelo seleccionado es la versión **sin** el regresor IMP; la versión con IMP rezagado (ARIMAX) obtuvo RMSE 7,83 y MAPE 2,84 % en la misma prueba.
+⁴ Alta variabilidad entre ejecuciones (una sola corrida en prueba): resultados no significativos.
 
 **Conclusiones principales**
 
-- El mejor modelo reduce el RMSE ≈ 63 % y el MAPE ≈ 64 % frente al Naïve.
-- ETS y GRU no superan al baseline en esta ventana.
-- Con solo 186 observaciones mensuales, los modelos de *machine learning* no superan a los clásicos; con más datos o mayor periodicidad podrían mejorar.
-- El IMP rezagado es significativo en el entrenamiento, pero no mejora el pronóstico fuera de muestra.
+- El mejor modelo (ARIMA sin IMP) reduce el RMSE ≈ 63 % y el MAPE ≈ 64 % frente al Naïve.
+- Prophet, Elastic Net y XGBoost también superan al baseline en esta ventana; ETS, GRU y LSTM no.
+- ETS tuvo el mejor MAPE en validación (1,23 %) pero uno de los peores en prueba (7,01 %): la elección entre 36 especificaciones con una sola ventana de 12 meses es muy sensible a esa ventana.
+- Con solo 186 observaciones mensuales, los modelos de *machine learning* no superan a los clásicos (ARIMA y Prophet); con más datos o mayor periodicidad podrían mejorar.
+- El IMP rezagado es significativo en el entrenamiento (y mejora el AIC en ≈ 9,5 puntos), pero no mejora el pronóstico fuera de muestra: sin IMP el MAPE es 1,74 % frente a 2,84 % con IMP.
+- En la prueba el IPAP subió de forma sostenida y los modelos con deriva (ARIMA y Prophet) quedan cerca del valor real; los demás tienden a subestimar o a oscilar.
 
-**Pronóstico final (jul-2026 → jun-2027).** El ARIMA(0,1,2) con deriva proyecta el índice de ≈ 252,7 a ≈ 277,5, con un intervalo del 90 % que se ensancha hasta ≈ 236–326 al final del horizonte.
+**Pronóstico final (jul-2026 → jun-2027).** El ARIMA(0,1,2) con deriva proyecta el índice de ≈ 253,7 a ≈ 269,6, con un intervalo del 90 % que se ensancha hasta ≈ 230–315 al final del horizonte. Los demás modelos terminan en jun-2027 entre ≈ 250 (Prophet) y ≈ 275 (XGBoost).
 
 ---
 
@@ -166,7 +178,7 @@ Desempeño en la prueba hold-out (jul-2025 a jun-2026). Menor es mejor.
 └── README.md
 ```
 
-Secciones del notebook: **1)** estadística descriptiva · **2)** correlación y estacionalidad · **3)** modelos econométricos (ARIMAX, ETS, Prophet) · **4)** *machine learning* (Elastic Net, XGBoost, LSTM, GRU) · **5)** comparación y pronóstico final · **6)** tablero interactivo.
+Secciones del notebook: **1)** estadística descriptiva · **2)** correlación y estacionalidad · **3)** modelos econométricos (ARIMA/ARIMAX, ETS, Prophet) · **4)** *machine learning* (Elastic Net, XGBoost, LSTM, GRU) · **5)** comparación y pronóstico final · **6)** tablero interactivo.
 
 ---
 
@@ -201,7 +213,7 @@ pip install -r requirements.txt
 jupyter lab DATALAB_CHALLENGE.ipynb
 ```
 
-Ejecuta el notebook completo (**Run All**). Tiempos aproximados: Elastic Net ≈ 2 min; XGBoost entre 5 y 10 min; las redes LSTM y GRU dependen del equipo por la búsqueda de hiperparámetros. Al terminar se genera `tablero_ipap.html` en la misma carpeta.
+Ejecuta el notebook completo (**Run All**). Tiempos aproximados (dependen del equipo): ETS y Elastic Net, menos de un minuto; XGBoost, unos 6 minutos; las redes LSTM y GRU tardan más por la búsqueda de hiperparámetros con validación cruzada. Al terminar se genera `tablero_ipap.html` en la misma carpeta.
 
 **Actualización mensual**
 
@@ -209,7 +221,7 @@ Ejecuta el notebook completo (**Run All**). Tiempos aproximados: Elastic Net ≈
 2. Ejecuta el notebook completo: las fechas de entrenamiento, prueba (últimos 12 meses) y pronóstico (12 meses siguientes) se desplazan solas.
 3. Abre `tablero_ipap.html` (requiere `generar_tablero.py` en la misma carpeta).
 
-Para sumar un modelo nuevo, añade una entrada al diccionario `modelos` de la sección 6: aparece como una pestaña más y entra en la comparación.
+Para sumar un modelo nuevo, añade una entrada al diccionario `modelos` de la sección 6: aparece como una pestaña más y entra en la comparación. Cada entrada puede incluir las claves opcionales `validacion` (cómo se eligió el modelo), `usa_prueba` (si la prueba intervino en la elección) y `salvedades` (aclaraciones propias), que el tablero muestra en la pestaña del modelo y en el Resumen.
 
 ---
 
@@ -218,7 +230,7 @@ Para sumar un modelo nuevo, añade una entrada al diccionario `modelos` de la se
 - Semilla global `SEED = 13` (simulación de intervalos de ETS, submuestreo de XGBoost y TensorFlow).
 - Los intervalos de ETS con componentes multiplicativos se obtienen por simulación y pueden variar unas décimas entre corridas.
 - LSTM y GRU son sensibles a la inicialización; por eso el pronóstico final es la mediana de 10 redes y la métrica de prueba (una sola corrida) debe leerse con cautela.
-- Todas las particiones son temporales y el código verifica que no haya fuga de información hacia la prueba.
+- Todas las particiones son temporales y el código verifica que no haya fuga de información hacia la prueba (en el ARIMAX, el `IMP_l12` de la prueba usa solo valores ya observados; en Elastic Net y XGBoost, ningún objetivo de la prueba entra al entrenamiento).
 
 ---
 
@@ -227,14 +239,14 @@ Para sumar un modelo nuevo, añade una entrada al diccionario `modelos` de la se
 **Limitaciones**
 
 - **Muestra pequeña** (186 observaciones mensuales), que restringe a los modelos de ML y de *deep learning*.
-- **Una sola ventana de prueba**, en un periodo de alza sostenida: el ranking podría cambiar en otra ventana.
-- **Decisiones tomadas con la prueba:** los parámetros de Prophet y la inclusión o no del IMP en el ARIMAX se eligieron mirando el MAPE de los últimos 12 meses, por lo que el error reportado puede ser algo optimista.
-- **Intervalos aproximados:** residuos no normales en el ARIMAX; bandas empíricas en Elastic Net y XGBoost; en LSTM/GRU la banda solo refleja la dispersión entre semillas.
+- **Una sola ventana de prueba y una sola de validación**, en un periodo de alza sostenida: el ranking podría cambiar en otra ventana (ETS es el ejemplo: primero en validación y entre los últimos en prueba).
+- **Decisiones tomadas con la prueba:** los parámetros de Prophet y la inclusión o no del IMP en el ARIMA se eligieron mirando el MAPE de los últimos 12 meses, por lo que el error reportado puede ser algo optimista.
+- **Intervalos aproximados:** residuos no normales en el ARIMA (el intervalo supone normalidad en logaritmos); bandas empíricas en Elastic Net y XGBoost construidas con solo 12 errores relativos, con el mismo ancho relativo en todos los horizontes; en LSTM/GRU la banda solo refleja la dispersión entre semillas.
 - **Exógenas limitadas:** IMP aporta asociación predictiva (no causal) y solo con rezago de 12 meses. Otras candidatas (commodities internacionales, petróleo, IPC de alimentos, IPP-DANE, ENSO/IDEAM) no se incorporaron por disponibilidad y rezago de publicación.
 
 **Trabajo futuro**
 
-- Validación *walk-forward* para todos los modelos y comparación formal de precisión (Diebold-Mariano, MASE).
+- Validación *walk-forward* con múltiples orígenes para todos los modelos y comparación formal de precisión (Diebold-Mariano, MASE).
 - Series con mayor periodicidad o más largas; la propia metodología del IPAP-BMC anticipa que su fuente de datos permitiría indicadores semanales o quincenales.
 - Combinación de pronósticos (*ensembles*) entre los mejores modelos.
 - Prueba piloto de 6 a 12 meses para medir la capacidad predictiva real.
@@ -260,4 +272,3 @@ Para sumar un modelo nuevo, añade una entrada al diccionario `modelos` de la se
 ## Equipo UdeA
 
 - **Equipo:** Miguel Ángel Patiño | Maria Camila Ramirez | Luisa Fernanda Rendón
-
